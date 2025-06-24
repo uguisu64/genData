@@ -7,6 +7,7 @@
     import { calcNomal, calcUniform, calcLaplace, calcExp, calcGamma, calcBeta, calcChisquare, makeBlob } from "$lib/pythonCodes";
 
     let settingObject = $state([])
+    let fileName = $state("my-cluster")
 
     let pyodideInstance = $state(null)
 
@@ -40,26 +41,84 @@
     $effect(async() => {
         settingObject
         results = await generateData()
-        console.log("asdfasdfa")
     })
 
     async function generateData() {
         const res = await Promise.all(settingObject.map(async(obj, i) => {
             if (obj.type === "makeblob") {
                 let context = pyodideInstance.toPy(obj.state)
-                const res = await pyodideInstance.runPythonAsync(makeBlob, { globals: context})
-                return res.toJs({ dict_converter: Object.fromEntries })
+                const resPy = await pyodideInstance.runPythonAsync(makeBlob, { globals: context})
+                const res = {...resPy.toJs({ dict_converter: Object.fromEntries }), i: i}
+                return res
             }
             else if (obj.type === "free") {
                 const contextX = pyodideInstance.toPy(obj.stateFree.x)
                 const resX = await pyodideInstance.runPythonAsync(psdMapping[obj.stateFree.x.type], {globals: contextX})
                 const contextY = pyodideInstance.toPy(obj.stateFree.y)
                 const resY = await pyodideInstance.runPythonAsync(psdMapping[obj.stateFree.y.type], {globals: contextY})
-                const res = { x: resX.toJs({ dict_converter: Object.fromEntries }), y: resY.toJs({ dict_converter: Object.fromEntries })}
+                const res = { x: resX.toJs({ dict_converter: Object.fromEntries }), y: resY.toJs({ dict_converter: Object.fromEntries }), i: i}
                 return res
             }
         }))
         return res
+    }
+
+    function createDataFileContent() {
+        const allPoints = [];
+
+        results.forEach(cluster => {
+            for (let i = 0; i < cluster.x.length; i++) {
+                allPoints.push([cluster.x[i], cluster.y[i]]);
+            }
+        });
+
+        let content = `${allPoints.length}\t2\n`;
+        const pointLines = allPoints.map(p => `${p[0]}\t${p[1]}`);
+        content += pointLines.join('\n');
+        
+        return content;
+    }
+
+    function createLabelFileContent() {
+        const allLabels = [];
+        results.forEach(cluster => {
+            for (let i = 0; i < cluster.x.length; i++) {
+                allLabels.push(cluster.i);
+            }
+        });
+
+        const numClusters = results.length;
+        const lines = [];
+
+        for (let k = 0; k < numClusters; k++) {
+            const membershipRow = allLabels.map(label => (label === k ? 1 : 0));
+            
+            lines.push(membershipRow.join(' '));
+        }
+        
+        return lines.join('\n');
+    }
+
+    function triggerDownload(content, fileName, mimeType) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    }
+
+    function handleDataDownload() {
+        const fileContent = createDataFileContent();
+        triggerDownload(fileContent, `${fileName}.dat`, 'text/plain');
+    }
+
+    function handleLabelDownload() {
+        const fileContent = createLabelFileContent();
+        triggerDownload(fileContent, `${fileName}.correctCrispMembership`, 'text/plain');
     }
 </script>
 
@@ -83,6 +142,19 @@
         {/each}
         <br>
         <button onclick={addCluster}>+</button>
+        <div class="config-group">
+            <h3>Export Results</h3>
+            <div class="form-item">
+                <label for="filename">File Name:</label>
+                <input type="text" id="filename" bind:value={fileName} placeholder="ファイル名を入力...">
+            </div>
+            <button onclick={handleDataDownload}>
+                Download Data (.dat)
+            </button>
+            <button onclick={handleLabelDownload}>
+                Download Labels (.correctCrispMembership)
+            </button>
+        </div>
     </div>
     <div class="main-content">
         {#if results}
@@ -130,5 +202,15 @@
         /* 4. (オプション) 枠線 */
         /* 影と組み合わせると境界がより明確になる */
         border: 1px solid #e2e8f0; 
+    }
+
+    .form-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+    }
+    .form-item input {
+        flex-grow: 1;
     }
 </style>
